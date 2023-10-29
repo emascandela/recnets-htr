@@ -1,0 +1,51 @@
+version: '3.9'
+name: ${HOSTNAME}-${USER}
+services:
+  research:
+    user: "root:nogroup"
+    image: "facephi-research-pytorch:23.06"
+    working_dir: /workspace/
+    shm_size: 2G
+    hostname: ${HOSTNAME}
+    cpus: ${CPUS}
+    mem_limit: ${MEMORY_LIMIT}
+    environment:
+      - PIP_ROOT_USER_ACTION=ignore
+      - TERM=xterm-256color
+      - SSH_AUTH_SOCK=/ssh-agent
+    volumes:
+      # Project workspace
+      - ./:/workspace/
+
+      # Ocean
+      - /mnt/ocean/production/:/mnt/ocean/production/
+      - /mnt/ocean/from_research/:/mnt/ocean/from_research/
+      - /mnt/ocean/develop/:/mnt/ocean/develop/
+      - /mnt/ocean/projects/:/mnt/ocean/projects/
+
+      # Scratch
+      - /mnt/scratch/production/:/mnt/scratch/production/
+      - /mnt/scratch/develop/:/mnt/scratch/develop/
+      - /mnt/scratch/tmp/:/mnt/scratch/tmp/
+      - /mnt/scratch/research-data/:/mnt/scratch/research-data/
+
+      # Facephi
+      - ${HOME}/.facephi/:/root/.facephi/
+      - ./prueba:/prueba
+
+      # Users's config
+      - ${HOME}/.bashrc:/root/.bashrc:ro
+      - /etc/profile:/root/.profile:ro
+
+      # SSH Forwading
+      - ${SSH_AUTH_SOCK}:/ssh-agent
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "${GPU_ID}" ]
+              capabilities: [ gpu ]
+
+    stdin_open: true # docker run -i
+    tty: true # docker run -t
