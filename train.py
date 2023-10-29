@@ -98,7 +98,7 @@ def run_experiment(base_params, share_params, train_params, model_name, dataset_
         dataset_names, base_params, share_params, train_params
     ):
         _experiment_name = f"{experiment_name} - {_dataset_name}"
-        train_model(
+        trained = train_model(
             model_name=model_name,
             dataset_name=_dataset_name,
             base_params=_base_params,
@@ -106,14 +106,17 @@ def run_experiment(base_params, share_params, train_params, model_name, dataset_
             train_params=_train_params,
             mlflow_experiment=_experiment_name,
         )
-        evaluate_model(
-            model_name=model_name,
-            dataset_name=_dataset_name,
-            base_params=_base_params,
-            share_params=_share_params,
-            train_params=_train_params,
-            mlflow_experiment=_experiment_name,
-        )
+
+        if trained:
+            evaluate_model(
+                model_name=model_name,
+                dataset_name=_dataset_name,
+                base_params=_base_params,
+                share_params=_share_params,
+                train_params=_train_params,
+                mlflow_experiment=_experiment_name,
+            )
+            return
 
 from mlflow.tracking.client import MlflowClient
 import gc
@@ -283,7 +286,7 @@ def train_model(
     if run_id is not None:
         print(run_id)
         print("Model already trained, skipping.")
-        return
+        return False
 
     with mlflow.start_run(run_id=run_id):
         mlflow.set_tag("md5", model.md5())
@@ -431,6 +434,8 @@ def train_model(
     del base_model
     gc.collect()
     torch.cuda.empty_cache()
+
+    return True
 
 
 def evaluate_model(

@@ -1,4 +1,5 @@
 mlflow
 albumentations
 torchinfo
+progressbar2
 opencv-python-headless==4.8.0.74
