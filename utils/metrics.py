@@ -1,5 +1,6 @@
 from typing import Union, Tuple, List, Any
 import torch
+import editdistance
 
 
 def edit_distance(prediction_tokens: List[Any], reference_tokens: List[Any]) -> int:
@@ -40,7 +41,8 @@ def cer(
         Number of character overall references
 
     """
-    return edit_distance(preds, target) / len(target)
+    return editdistance.eval(preds, target) / len(target)
+
     if isinstance(preds, str):
         preds = [preds]
     if isinstance(target, str):
@@ -50,6 +52,6 @@ def cer(
     for pred, tgt in zip(preds, target):
         pred_tokens = pred
         tgt_tokens = tgt
-        errors += edit_distance(list(pred_tokens), list(tgt_tokens))
+        errors += editdistance.eval(list(pred_tokens), list(tgt_tokens))
         total += len(tgt_tokens)
     return errors / total
