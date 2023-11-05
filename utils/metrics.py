@@ -1,4 +1,5 @@
 from typing import Union, Tuple, List, Any
+import numpy as np
 import torch
 import editdistance
 
@@ -41,7 +42,8 @@ def cer(
         Number of character overall references
 
     """
-    return editdistance.eval(preds, target) / len(target)
+    # return editdistance.eval(preds, target) / len(target)
+    return editdistance.eval(preds.numpy().astype(np.int32), target.numpy().astype(np.int32)) / len(target)
 
     if isinstance(preds, str):
         preds = [preds]

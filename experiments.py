@@ -92,7 +92,7 @@ def baseline():
         "num_filters": [16],
         "block_size": [1, 2, 3],
         "lstm_layers": [2, 3],
-        "lstm_hidden_size": [256, 64],
+        "lstm_hidden_size": [64],
         "num_outputs": [163],
     }
     share_params = {

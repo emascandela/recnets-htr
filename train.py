@@ -152,6 +152,7 @@ def evaluate(model, dataloader, device):
 
         mask = torch.squeeze(
             torchvision.transforms.functional.resize(torch.unsqueeze(mask, 0), (outputs.size()[0], outputs.size()[1]), interpolation=torchvision.transforms.InterpolationMode.NEAREST), 0)
+        input_lengths = torch.tensor([mask.shape[1]] * mask.shape[0]) #mask.sum(1).to(torch.int32)
 
         # print("mask", mask.sum(1))
 
@@ -416,8 +417,13 @@ def train_model(
 
             lr_scheduler.step()
 
+
+            print(f"Train time: {time.time() - start_time} s")
+            val_start = time.time()
             cer = evaluate(model, val_dataloader, device)
+            print(f"Validation time: {time.time() - val_start} s")
             mlflow.log_metric("val_cer", cer, step=global_step)
+
 
             print(f"Val cer: {cer:.4f}")
             if cer < best_cer:
@@ -426,7 +432,7 @@ def train_model(
                 print("Decreased best cer")
                 model.save()
                 # torch.save(model.state_dict(), model.path)
-            print(f"Time per epoch: {time.time() - start_time} s")
+            print(f"Total epoch time: {time.time() - start_time} s")
 
         # model.save()
 
