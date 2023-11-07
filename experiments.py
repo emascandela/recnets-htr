@@ -90,9 +90,9 @@ def baseline():
     base_params = {
         "input_size": [64],
         "num_filters": [16],
-        "block_size": [1, 2, 3],
-        "lstm_layers": [2, 3],
-        "lstm_hidden_size": [64],
+        "block_size": reversed([1, 2, 3]),
+        "lstm_layers": reversed([2, 3]),
+        "lstm_hidden_size": [64, 256],
         "num_outputs": [163],
     }
     share_params = {
