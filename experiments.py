@@ -104,8 +104,8 @@ def baseline():
         "use_weight_scaler": [False, True],
     }
     train_params = {
-        # "batch_size": [32],
-        "batch_size": [64],
+        "batch_size": [32],
+        # "batch_size": [64],
         "optimizer": ["adam"],
         "epochs": [1000],
         "min_epochs": [80],
@@ -117,12 +117,12 @@ def baseline():
         ],
         "scheduler_params": [{"milestones": [1000000]}],
         "augment": ["resnet_simple"],
-        "model_id": [0],
+        "model_id": [0, 1, 2],
     }
 
     model_name = "crnn"
-    # dataset_names = ["IAM", "WASHINGTON", "PARZIVAL", "SAINT_GALL"]
-    dataset_names = ["IAM_S"]
+    dataset_names = ["WASHINGTON", "PARZIVAL", "SAINT_GALL"]
+    # dataset_names = ["IAM_S"]
     experiment_name = "CRNN"
     return (
         base_params,

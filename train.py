@@ -375,7 +375,7 @@ def train_model(
         losses = []
         for epoch in range(train_params.epochs):
             start_time = time.time()
-            if (epoch - last_best_epoch) > train_params.patience and (epoch > (train_params.min_epochs * 2)):
+            if (epoch - last_best_epoch) > train_params.patience and (epoch > (train_params.min_epochs * 3)):
                 break
 
             mlflow.log_metric("epoch", epoch, step=global_step)
