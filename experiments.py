@@ -117,12 +117,13 @@ def baseline():
         ],
         "scheduler_params": [{"milestones": [1000000]}],
         "augment": ["resnet_simple"],
-        "model_id": [0, 1, 2],
+        "model_id": [0] #, 1, 2],
     }
 
     model_name = "crnn"
-    dataset_names = ["WASHINGTON", "PARZIVAL", "SAINT_GALL"]
-    # dataset_names = ["IAM_S"]
+    # dataset_names = ["WASHINGTON", "PARZIVAL", "SAINT_GALL"]
+    # dataset_names = ["SAINT_GALL"]
+    dataset_names = ["IAM_S"]
     experiment_name = "CRNN"
     return (
         base_params,

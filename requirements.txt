@@ -1,4 +1,6 @@
 mlflow
+torch
+torchvision
 albumentations
 torchinfo
 progressbar2

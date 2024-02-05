@@ -106,7 +106,6 @@ class CRNN(BaseModel):
         self.fc_prelstm = nn.Linear(lstm_input_shape, self.base_params.lstm_hidden_size*2, bias=False)
 
         lstm_input_shape = self.base_params.lstm_hidden_size*2
-        print(lstm_input_shape)
         for i in range(self.base_params.lstm_layers):
             if (i % self.share_params.share_rnn_stride != 0):
                 l = lstm_layers[-1]
@@ -125,14 +124,12 @@ class CRNN(BaseModel):
         self.dropout = nn.Dropout(0.5)
         self.fc_out = nn.Linear(self.base_params.lstm_hidden_size*2, self.base_params.num_outputs)
     
-    def make_block(self, in_channels: int, out_channels: int, num_layers: int, kernel_size: int, max_pool: tuple[int, int], dropout: float) -> nn.Module:
+    def make_block(self, in_channels: int, out_channels: int, num_layers: int, kernel_size: int, max_pool: Tuple[int, int], dropout: float) -> nn.Module:
         block = [
             nn.Conv2d(in_channels, out_channels, 1, bias=False)
         ]
-        print(in_channels, out_channels)
         for i in range(0, num_layers, self.share_params.share_layer_stride):
             use_last_conv = (i % self.share_params.share_layer_stride) != 0
-            print(use_last_conv)
 
             block.append(BasicBlock(
                     in_channels=out_channels,
