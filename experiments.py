@@ -153,11 +153,11 @@ def sample():
 
         "cluster_ratio": [0.25, 0.5, 0.1],
         
-        "share_mode": ["channel"],
+        "share_mode": ["channel", "unit"],
         # "share_mode": ["channel", "all"],
         "cluster_mode": ["all"], 
         "cluster_steps": [20, 50, 0],
-        "warmup_steps": [160, 0],
+        "warmup_steps": [50, 160],
     }
     train_params = {
         "batch_size": [32],

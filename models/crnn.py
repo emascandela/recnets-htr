@@ -341,7 +341,15 @@ class CRNN(BaseModel):
         stride_suffix = f"-S{self.share_params.share_layer_stride}" if self.share_params.share_layer_stride != 1 else ""
         ws_suffix = "WS" if self.share_params.use_weight_scaler else ""
         lstm_suffix = f"-{self.base_params.lstm_layers}x{self.base_params.lstm_hidden_size}LSTM" + (f"-S{self.share_params.share_rnn_stride}" if self.share_params.share_rnn_stride != 1 else "")
-        return f"CRNN{self.base_params.block_size}x{self.base_params.num_filters}{stride_suffix}{ws_suffix}{lstm_suffix}"
+
+        cluster_suffix = ""
+        if self.share_params.cluster_ratio != 1.0:
+            cluster_suffix += f"r{self.share_params.cluster_ratio}"
+            cluster_suffix += f"_{self.share_params.share_mode}"
+            cluster_suffix += f"_C{self.share_params.cluster_steps}"
+            cluster_suffix += f"_W{self.share_params.warmup_steps}"
+
+        return f"CRNN{self.base_params.block_size}x{self.base_params.num_filters}{stride_suffix}{ws_suffix}{lstm_suffix}_{cluster_suffix}"
 
 
     def extract_features(self, x):
@@ -387,6 +395,8 @@ class CRNN(BaseModel):
         elif base_params.lstm_layers < share_params.share_rnn_stride:
             return False
         elif base_params.block_size < share_params.share_layer_stride:
+            return False
+        elif (share_params.cluster_ratio == 1.0) and (share_params.warmup_steps != 0 or share_params.cluster_steps != 0 or share_params.share_mode != "all"):
             return False
 
         return True
