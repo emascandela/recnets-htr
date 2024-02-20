@@ -57,28 +57,44 @@ class ClusterableParamWrapper(nn.Module):
         self.param = nn.Parameter(*args, **kwargs)
 
 class ClusterableParam(nn.Module):
-    def __init__(self, param, cluster_shape):
+    def __init__(self, param, share_mode):
         super().__init__()
         self._p = param
-        self.cluster_shape = cluster_shape
         self.is_clusterable = False
+
+        assert len(param.shape) in (3, 4), "Error, unsuported number of dimensions"
+
+        if share_mode == "unit":
+            self.cluster_shape = (np.prod(param.shape), 1)
+            # self._weights = to_param(unbind(self.weight, range(len(self.weight.shape))))
+        elif share_mode == "channel":
+            self.cluster_shape = (np.prod(param.shape[:2]), *param.shape[2:])
+            # self._weights = to_param(unbind(self.weight, [0, 1]))
+        elif share_mode == "all" or share_mode is None:
+            self.cluster_shape = (1, *(param.shape))
+            # self._weights = self.weight
+        else:
+            raise Exception("Unknown share mode", share_mode)
+
+
     
     @property
     def param(self):
         if self.is_clusterable:
-            torch.stack([p.param for p in self._p])
+            torch.stack([p.param for p in self._cluster_p])
         
         return self._p
 
     def make_clusterable(self):
-        param = self._p
-        self._p = nn.ModuleList([ClusterableParamWrapper(p) for p in torch.unbind(param.reshape(self.cluster_shape))])
-        del param
+        if self.is_clusterable:
+            return
+        self._cluster_p = nn.ModuleList([ClusterableParamWrapper(p) for p in torch.unbind(self._p.reshape(self.cluster_shape))])
+        del self._p
         self.is_clusterable = True
     
     def get_clusterable_weights(self):
         if self.is_clusterable:
-            return self._p
+            return self._cluster_p
         return []
 
 
@@ -100,22 +116,10 @@ class ClusterableConv2d(nn.Conv2d):
     ):
         super().__init__(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=bias, padding_mode=padding_mode, device=device, dtype=dtype)
         self.weight_shape = self.weight.shape
-        if share_mode == "unit":
-            self.cluster_shape = (np.prod(self.weight.shape), 1)
-            # self._weights = to_param(unbind(self.weight, range(len(self.weight.shape))))
-        elif share_mode == "channel":
-            self.cluster_shape = (np.prod(self.weight.shape[:2]), *self.weight.shape[2:])
-            # self._weights = to_param(unbind(self.weight, [0, 1]))
-        elif share_mode == "all" or share_mode is None:
-            self.cluster_shape = (1, *(self.weight.shape))
-            # self._weights = self.weight
-        else:
-            raise Exception("Unknown share mode", share_mode)
-
         # self._weights = nn.ModuleList([ClusterableParam(p) for p in torch.unbind(self.weight.reshape(self.cluster_shape))])
         # del self.weight
         # ClusterableConv2d.weight = property(lambda self: torch.stack([p.param for p in self._weights]).reshape(self.weight_shape))
-        self._weight = ClusterableParam(self.weight, self.cluster_shape)
+        self._weight = ClusterableParam(self.weight, share_mode)
         ClusterableConv2d.weight = property(lambda self: self._weight.param)
 
         # self.bias
@@ -295,6 +299,8 @@ class CRNN(BaseModel):
                             convs["conv"] = []
                         convs['conv'].extend(w)
 
+        return {**convs, **recurrents}
+
     def make_clusterable(self):
         for block in [self.block1, self.block2, self.block3, self.block4, self.block5]:
             for layer in block:
@@ -307,7 +313,6 @@ class CRNN(BaseModel):
         #     recurrents.append(layer.weight_ih_l0_reverse)
         #     recurrents.append(layer.weight_hh_l0_reverse)
         
-        return {**convs, **recurrents}
     
     def make_block(self, in_channels: int, out_channels: int, num_layers: int, kernel_size: int, max_pool: tuple[int, int], dropout: float) -> nn.Module:
         block = [

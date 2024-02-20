@@ -151,7 +151,7 @@ def run_experiment(base_params, share_params, train_params, model_name, dataset_
         dataset_names, base_params, share_params, train_params
     ):
         _experiment_name = f"{experiment_name} - {_dataset_name}"
-        trained = train_model(
+        train_model(
             model_name=model_name,
             dataset_name=_dataset_name,
             base_params=_base_params,
@@ -160,16 +160,17 @@ def run_experiment(base_params, share_params, train_params, model_name, dataset_
             mlflow_experiment=_experiment_name,
         )
 
-        if trained:
-            evaluate_model(
-                model_name=model_name,
-                dataset_name=_dataset_name,
-                base_params=_base_params,
-                share_params=_share_params,
-                train_params=_train_params,
-                mlflow_experiment=_experiment_name,
-            )
-            return
+        # if model is not None:
+        #     evaluate_model(
+        #         model=model,
+        #         model_name=model_name,
+        #         dataset_name=_dataset_name,
+        #         base_params=_base_params,
+        #         share_params=_share_params,
+        #         train_params=_train_params,
+        #         mlflow_experiment=_experiment_name,
+        #     )
+        #     return
 
 from mlflow.tracking.client import MlflowClient
 import gc
@@ -305,8 +306,6 @@ def train_model(
         ]
     )
 
-
-
     if dataset_name == "IAM_S":
         print("Running with subset of train split IAM")
         train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3], transform=train_transform)
@@ -317,6 +316,7 @@ def train_model(
     else:
         train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3, 4, 5, 6, 7, 8, 9], transform=train_transform)
     val_dataset = HTRDataset(f"data/{dataset_name}", splits=[0], transform=val_transform)
+    test_dataset = HTRDataset(f"data/{dataset_name}", splits=[1], transform=val_transform)
 
     # num_characters = len(train_dataset.get_chars())
     # base_params = base_params.copy()
@@ -390,6 +390,13 @@ def train_model(
         val_dataloader = torch.utils.data.DataLoader(
             val_dataset, batch_size=train_params.batch_size, shuffle=False, num_workers=4, 
             pin_memory=True,
+            collate_fn=collate_fn,
+        )
+        test_dataloader = torch.utils.data.DataLoader(
+            test_dataset,
+            batch_size=train_params.batch_size,
+            shuffle=False,
+            num_workers=2,
             collate_fn=collate_fn,
         )
 
@@ -481,10 +488,19 @@ def train_model(
 
             print(f"Train time: {time.time() - start_time} s")
             val_start = time.time()
-            cer = evaluate(model, val_dataloader, device)
+            val_cer = evaluate(model, val_dataloader, device)
             print(f"Validation time: {time.time() - val_start} s")
-            mlflow.log_metric("val_cer", cer, step=global_step)
-            print(f"Val cer: {cer:.4f}")
+            mlflow.log_metric("val_cer", val_cer, step=global_step)
+            print(f"Val cer: {val_cer:.4f}")
+
+            if val_cer < best_cer:
+                last_best_epoch = epoch
+                best_cer = val_cer
+                print("Decreased best cer")
+                # model.save()
+                cer = evaluate(model, test_dataloader, device)
+                mlflow.log_metric("cer", cer)
+                # torch.save(model.state_dict(), model.path)
 
             if epoch >= model.share_params.warmup_steps and epoch < (model.share_params.warmup_steps + model.share_params.cluster_steps):
                 print("Clustering weights")
@@ -500,27 +516,19 @@ def train_model(
                 optimizer.param_groups.clear()
                 optimizer.add_param_group({"params": list(model.parameters())})
 
-            if cer < best_cer:
-                last_best_epoch = epoch
-                best_cer = cer
-                print("Decreased best cer")
-                model.save()
-                # torch.save(model.state_dict(), model.path)
             print(f"Total epoch time: {time.time() - start_time} s")
 
         mlflow.log_metric("params", model.get_params())
         # model.save()
 
-    del model
-    del base_model
-    gc.collect()
-    torch.cuda.empty_cache()
+    # del model
+    # model.load()
 
-    return True
+    return model
 
 
 def evaluate_model(
-    model_name, dataset_name, base_params, share_params, train_params, mlflow_experiment
+    model, model_name, dataset_name, base_params, share_params, train_params, mlflow_experiment
 ):
     print(model_name, dataset_name, base_params, share_params, train_params, sep="\n")
     if not ModelFactory.is_legal(model_name, base_params, share_params):
@@ -532,13 +540,13 @@ def evaluate_model(
     experiment = mlflow.set_experiment(mlflow_experiment)
 
     train_params = TrainParams(**train_params)
-    model = ModelFactory.get_model(
-        model_name,
-        dataset_name=dataset_name,
-        base_params=base_params,
-        share_params=share_params,
-        train_params=dataclasses.asdict(train_params),
-    )
+    # model = ModelFactory.get_model(
+    #     model_name,
+    #     dataset_name=dataset_name,
+    #     base_params=base_params,
+    #     share_params=share_params,
+    #     train_params=dataclasses.asdict(train_params),
+    # )
     base_model = model.get_base_model()
 
     print(model.md5())
@@ -575,7 +583,7 @@ def evaluate_model(
     model.eval()
 
     with mlflow.start_run(run_id=run.info.run_id):
-        model.load()
+        # model.load()
         model.to(device)
 
         # mlflow.log_metric("params", model.get_params())
