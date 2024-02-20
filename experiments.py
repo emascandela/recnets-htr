@@ -104,8 +104,8 @@ def baseline():
         "use_weight_scaler": [False, True],
     }
     train_params = {
-        # "batch_size": [32],
-        "batch_size": [64],
+        "batch_size": [32],
+        # "batch_size": [64],
         "optimizer": ["adam"],
         "epochs": [1000],
         "min_epochs": [80],
@@ -121,8 +121,64 @@ def baseline():
     }
 
     model_name = "crnn"
-    # dataset_names = ["IAM", "WASHINGTON", "PARZIVAL", "SAINT_GALL"]
-    dataset_names = ["IAM_S"]
+    dataset_names = ["WASHINGTON", "PARZIVAL", "SAINT_GALL"]
+    # dataset_names = ["IAM_S"]
+    experiment_name = "CRNN"
+    return (
+        base_params,
+        share_params,
+        train_params,
+        model_name,
+        dataset_names,
+        experiment_name,
+    )
+
+
+def sample():
+    base_params = {
+        "input_size": [64],
+        "num_filters": [16],
+        "block_size": reversed([2]),
+        "lstm_layers": reversed([2]),
+        "lstm_hidden_size": [64],
+        "num_outputs": [163],
+    }
+    share_params = {
+        # "share_layers": [False, True],
+        # "share_layer_batch_norm": [False, True],
+        "share_layer_stride": [1],
+        "share_rnn_stride": [1],
+        "share_layer_batch_norm": [False],
+        "use_weight_scaler": [False],
+
+        "cluster_ratio": [0.25, 0.5, 0.1],
+        
+        "share_mode": ["channel"],
+        # "share_mode": ["channel", "all"],
+        "cluster_mode": ["all"], 
+        "cluster_steps": [20, 50, 0],
+        "warmup_steps": [160, 0],
+    }
+    train_params = {
+        "batch_size": [32],
+        # "batch_size": [64],
+        "optimizer": ["adam"],
+        "epochs": [1000],
+        "min_epochs": [80],
+        "patience": [50],
+        "optimizer_params": [
+            {
+                "lr": 0.0003,
+            }
+        ],
+        "scheduler_params": [{"milestones": [1000000]}],
+        "augment": ["resnet_simple"],
+        "model_id": [0],
+    }
+
+    model_name = "crnn"
+    dataset_names = ["WASHINGTON"]
+    # dataset_names = ["IAM_S"]
     experiment_name = "CRNN"
     return (
         base_params,

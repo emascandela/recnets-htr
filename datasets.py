@@ -38,6 +38,9 @@ class HTRDataset(Dataset):
         else:
             self.image_paths = png_image_paths
 
+        print("Loading images")
+        self.images = [Image.open(image_path).convert("RGB") for image_path in self.image_paths]
+        print("Images loaded")
 
         self.transform = transform
 
@@ -47,9 +50,10 @@ class HTRDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        image_path = self.image_paths[idx]
         gt_path = self.gt_paths[idx]
-        image = Image.open(image_path).convert("RGB")
+        # image_path = self.image_paths[idx]
+        # image = Image.open(image_path).convert("RGB")
+        image = self.images[idx]
 
         with open(gt_path, "r") as f:
             label = f.read().splitlines()

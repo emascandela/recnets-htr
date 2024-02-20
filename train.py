@@ -17,8 +17,61 @@ import experiments
 from autoaugment import CIFAR10Policy
 from utils import metrics
 import cv2
+from sklearn.cluster import KMeans
+
 
 import itertools
+
+def cluster_weights(weights, cluster_ratio=1.0, replace_params=False):
+    if cluster_ratio >= 1.0:
+        return
+
+    with torch.no_grad():
+        # weight_index = []
+
+
+        shaped_groups = {}
+        for k, weight_group in weights.items():
+            for s in weight_group:
+                new_k = k+"_"+"_".join(map(str, s.param.shape))
+                if new_k in shaped_groups:
+                    shaped_groups[new_k].append(s)
+                else:
+                    shaped_groups[new_k] = [s]
+        for k, weight_group in shaped_groups.items():
+            # n_clusters = cluster_ratio
+            n_clusters = int(np.ceil(cluster_ratio * len(weight_group)))
+
+            np_weights = np.stack([w.param.detach().cpu().numpy() for w in weight_group])
+            print('clustering', k, n_clusters, np_weights.shape)
+            weight_shape = np_weights.shape[1:]
+            np_weights = np_weights.reshape([np_weights.shape[0], -1])
+            # flatten_weights = []
+            # for w in weights["conv"]:
+            #     # flatten_weights.append(w.detach().cpu().numpy().reshape([-1, np.prod(w.shape[-2:])]))
+            #     # weight_index.extend(range(last_i, last_i+w))
+            # flatten_weights = np.concatenate(flatten_weights)
+
+            kmeans = KMeans(n_clusters=n_clusters, random_state=0, init="random", n_init=1).fit(np_weights)
+            # clustered_weights = np.zeros(len(np_weights)).astype(np.int32)
+            clustered_weights = np.zeros_like(np_weights)
+
+            cluster_centers = torch.from_numpy(kmeans.cluster_centers_)
+            if replace_params:
+                cluster_centers = cluster_centers.reshape((-1, *weight_shape))
+                cluster_centers = cluster_centers.cuda()
+                cluster_centers = [nn.Parameter(c) for c in torch.unbind(cluster_centers)]
+
+                clustered_weights = [cluster_centers[c] for c in kmeans.labels_]
+
+                for w, new_w in zip(weight_group, clustered_weights):
+                    w.param = new_w
+            else:
+                for i, c in enumerate(kmeans.labels_-1):
+                    clustered_weights[i] = cluster_centers[c]
+
+                for w, new_w in zip(weight_group, clustered_weights):
+                    w.param.copy_(torch.Tensor(new_w.reshape(w.param.shape)))
 
 class FixedHeightResize(object):
     def __init__(self, height):
@@ -375,7 +428,7 @@ def train_model(
         losses = []
         for epoch in range(train_params.epochs):
             start_time = time.time()
-            if (epoch - last_best_epoch) > train_params.patience and (epoch > (train_params.min_epochs * 2)):
+            if (epoch - last_best_epoch) > train_params.patience and (epoch > (model.share_params.warmup_steps + train_params.min_epochs * 3)):
                 break
 
             mlflow.log_metric("epoch", epoch, step=global_step)
@@ -383,24 +436,32 @@ def train_model(
             model.train()
 
             for i, data in enumerate(train_dataloader, 0):
+                # print(f"It {i} {time.time() - start_time}", device)
                 # inputs, labels = data
                 (inputs, mask), (labels, label_lengths) = data
+
                 optimizer.zero_grad()
                 # inputs = resize(inputs.to(device))
-                inputs = inputs.to(device)
 
-                outputs = model(inputs)
-                # outputs = outputs.log_softmax(2)
+                with torch.autocast(device_type="cuda"):
+                    inputs = inputs.to(device)
+                    outputs = model(inputs)
+                    # print(f"Inf {i} {time.time() - start_time}")
+                    # outputs = outputs.log_softmax(2)
 
-                with torch.no_grad():
-                    mask = torch.squeeze(
-                        torchvision.transforms.functional.resize(torch.unsqueeze(mask, 0), (outputs.size()[0], outputs.size()[1]), interpolation=torchvision.transforms.InterpolationMode.NEAREST), 0)
-                    input_lengths = torch.tensor([mask.shape[1]] * mask.shape[0]) #mask.sum(1).to(torch.int32)
-                
+                    with torch.no_grad():
+                        mask = torch.squeeze(
+                            torchvision.transforms.functional.resize(torch.unsqueeze(mask, 0), (outputs.size()[0], outputs.size()[1]), interpolation=torchvision.transforms.InterpolationMode.NEAREST), 0)
+                        input_lengths = torch.tensor([mask.shape[1]] * mask.shape[0]) #mask.sum(1).to(torch.int32)
+                    
+                    # print(f"Resize {i} {time.time() - start_time}")
 
-                loss = loss_fn(outputs.permute(1, 0, 2).log_softmax(2), labels.to(device), input_lengths.to(device), label_lengths.to(device))
+                    loss = loss_fn(outputs.permute(1, 0, 2).log_softmax(2), labels.to(device), input_lengths.to(device), label_lengths.to(device))
+                    # print(f"Loss {i} {time.time() - start_time}")
                 loss.backward()
+                # print(f"Back {i} {time.time() - start_time}")
                 optimizer.step()
+                # print(f"Optim step {i} {time.time() - start_time}")
 
                 # print statistics
                 losses.append(loss.item())
@@ -423,9 +484,22 @@ def train_model(
             cer = evaluate(model, val_dataloader, device)
             print(f"Validation time: {time.time() - val_start} s")
             mlflow.log_metric("val_cer", cer, step=global_step)
-
-
             print(f"Val cer: {cer:.4f}")
+
+            if epoch >= model.share_params.warmup_steps and epoch < (model.share_params.warmup_steps + model.share_params.cluster_steps):
+                print("Clustering weights")
+                model.make_clusterable()
+                clusterable_weights = model.get_clusterable_weights()
+                cluster_weights(clusterable_weights, model.share_params.cluster_ratio)
+                new_cer = evaluate(model, val_dataloader, device)
+                print(f"After cluster cer: {new_cer:.4f}")
+            elif epoch == (model.share_params.warmup_steps + model.share_params.cluster_steps):
+                print("Clustering weights and setting new params")
+                clusterable_weights = model.get_clusterable_weights()
+                cluster_weights(clusterable_weights, model.share_params.cluster_ratio, replace_params=True)
+                optimizer.param_groups.clear()
+                optimizer.add_param_group({"params": list(model.parameters())})
+
             if cer < best_cer:
                 last_best_epoch = epoch
                 best_cer = cer
@@ -434,6 +508,7 @@ def train_model(
                 # torch.save(model.state_dict(), model.path)
             print(f"Total epoch time: {time.time() - start_time} s")
 
+        mlflow.log_metric("params", model.get_params())
         # model.save()
 
     del model
@@ -494,7 +569,7 @@ def evaluate_model(
         test_dataset,
         batch_size=train_params.batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=2,
         collate_fn=collate_fn,
     )
     model.eval()
@@ -503,21 +578,21 @@ def evaluate_model(
         model.load()
         model.to(device)
 
-        mlflow.log_metric("params", model.get_params())
+        # mlflow.log_metric("params", model.get_params())
 
         cer = evaluate(model, test_dataloader, device)
         mlflow.log_metric("cer", cer)
 
-        if model.md5() != base_model.md5():
-            mlflow.log_metric("params-baseline", base_model.get_params())
-            mlflow.log_metric(
-                "params-rel_diff", model.get_params() / base_model.get_params()
-            )
+        # if model.md5() != base_model.md5():
+        #     mlflow.log_metric("params-baseline", base_model.get_params())
+        #     mlflow.log_metric(
+        #         "params-rel_diff", model.get_params() / base_model.get_params()
+        #     )
 
-            baseline_cer = base_run.data.metrics["cer"]
-            mlflow.log_metric("cer-baseline", baseline_cer)
-            mlflow.log_metric("cer-rel_diff", cer / baseline_cer)
-            mlflow.log_metric("cer-abs_diff", cer - baseline_cer)
+        #     baseline_cer = base_run.data.metrics["cer"]
+        #     mlflow.log_metric("cer-baseline", baseline_cer)
+        #     mlflow.log_metric("cer-rel_diff", cer / baseline_cer)
+        #     mlflow.log_metric("cer-abs_diff", cer - baseline_cer)
 
         mlflow.set_tag("eval", True)
 
@@ -551,4 +626,4 @@ if __name__ == "__main__":
 
     # run_experiment(*experiments.cfresnet())
     # run_experiment(*experiments.crnn())
-    run_experiment(*experiments.baseline())
+    run_experiment(*experiments.sample())
