@@ -500,6 +500,7 @@ def train_model(
                 # model.save()
                 cer = evaluate(model, test_dataloader, device)
                 mlflow.log_metric("cer", cer)
+                mlflow.log_metric("params", model.get_params())
                 # torch.save(model.state_dict(), model.path)
 
             if epoch >= model.share_params.warmup_steps and epoch < (model.share_params.warmup_steps + model.share_params.cluster_steps):
@@ -509,16 +510,20 @@ def train_model(
                 cluster_weights(clusterable_weights, model.share_params.cluster_ratio)
                 new_cer = evaluate(model, val_dataloader, device)
                 print(f"After cluster cer: {new_cer:.4f}")
+                print(f"Params before: ")
             elif epoch == (model.share_params.warmup_steps + model.share_params.cluster_steps):
                 print("Clustering weights and setting new params")
+                params_b = model.params()
+                model.make_clusterable()
                 clusterable_weights = model.get_clusterable_weights()
                 cluster_weights(clusterable_weights, model.share_params.cluster_ratio, replace_params=True)
+                params_a = model.params()
                 optimizer.param_groups.clear()
                 optimizer.add_param_group({"params": list(model.parameters())})
+                print(f"Params before/after: {params_b} {params_a}")
 
             print(f"Total epoch time: {time.time() - start_time} s")
 
-        mlflow.log_metric("params", model.get_params())
         # model.save()
 
     # del model
