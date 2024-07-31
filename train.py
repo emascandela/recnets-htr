@@ -353,7 +353,7 @@ def train_model(
     run = get_run(experiment_name, model.md5())
 
     if run is not None:
-        print("Model already trained, skipping.")
+        # print("Model already trained, skipping.")
         return False
 
     # with mlflow.start_run(run_id=run_id):
@@ -606,7 +606,7 @@ def evaluate_model(
 ):
     print(model_name, dataset_name, base_params, share_params, train_params, sep="\n")
     if not ModelFactory.is_legal(model_name, base_params, share_params):
-        print("Illegal config, skipping")
+        # print("Illegal config, skipping")
         return
 
     device = "cuda"

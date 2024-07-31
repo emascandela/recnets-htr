@@ -38,9 +38,7 @@ class HTRDataset(Dataset):
         else:
             self.image_paths = png_image_paths
 
-        print("Loading images")
         self.images = [Image.open(image_path).convert("RGB") for image_path in self.image_paths]
-        print("Images loaded")
 
         self.transform = transform
 
