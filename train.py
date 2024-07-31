@@ -1,6 +1,10 @@
+import sys
 from models import ModelFactory
+import json
+import tempfile
 import time
 import copy
+import os
 import torchinfo
 # from datasets import DatasetFactory
 import albumentations as A
@@ -12,66 +16,26 @@ from typing import Any, Dict
 import torch
 from torch import nn
 import mlflow
+from mlflow.tracking.client import MlflowClient
+import wandb
 import numpy as np
 import experiments
 from autoaugment import CIFAR10Policy
 from utils import metrics
 import cv2
 from sklearn.cluster import KMeans
+from joblib import parallel_backend
+from torch.ao.quantization import QuantStub, DeQuantStub
 
+
+# WANDB_API_KEY = "e3dd99069f49577edaf1c80982c52f12fcdebb36"
+WANDB_API_KEY = os.environ["WANDB_API_KEY"]
+WANDB_ENTITY = "emascandela"
+
+wandb.login(key=WANDB_API_KEY)
 
 import itertools
 
-def cluster_weights(weights, cluster_ratio=1.0, replace_params=False):
-    if cluster_ratio >= 1.0:
-        return
-
-    with torch.no_grad():
-        # weight_index = []
-
-
-        shaped_groups = {}
-        for k, weight_group in weights.items():
-            for s in weight_group:
-                new_k = k+"_"+"_".join(map(str, s.param.shape))
-                if new_k in shaped_groups:
-                    shaped_groups[new_k].append(s)
-                else:
-                    shaped_groups[new_k] = [s]
-        for k, weight_group in shaped_groups.items():
-            # n_clusters = cluster_ratio
-            n_clusters = int(np.ceil(cluster_ratio * len(weight_group)))
-
-            np_weights = np.stack([w.param.detach().cpu().numpy() for w in weight_group])
-            print('clustering', k, n_clusters, np_weights.shape)
-            weight_shape = np_weights.shape[1:]
-            np_weights = np_weights.reshape([np_weights.shape[0], -1])
-            # flatten_weights = []
-            # for w in weights["conv"]:
-            #     # flatten_weights.append(w.detach().cpu().numpy().reshape([-1, np.prod(w.shape[-2:])]))
-            #     # weight_index.extend(range(last_i, last_i+w))
-            # flatten_weights = np.concatenate(flatten_weights)
-
-            kmeans = KMeans(n_clusters=n_clusters, random_state=0, init="random", n_init=1).fit(np_weights)
-            # clustered_weights = np.zeros(len(np_weights)).astype(np.int32)
-            clustered_weights = np.zeros_like(np_weights)
-
-            cluster_centers = torch.from_numpy(kmeans.cluster_centers_)
-            if replace_params:
-                cluster_centers = cluster_centers.reshape((-1, *weight_shape))
-                cluster_centers = cluster_centers.cuda()
-                cluster_centers = [nn.Parameter(c) for c in torch.unbind(cluster_centers)]
-
-                clustered_weights = [cluster_centers[c] for c in kmeans.labels_]
-
-                for w, new_w in zip(weight_group, clustered_weights):
-                    w.param = new_w
-            else:
-                for i, c in enumerate(kmeans.labels_-1):
-                    clustered_weights[i] = cluster_centers[c]
-
-                for w, new_w in zip(weight_group, clustered_weights):
-                    w.param.copy_(torch.Tensor(new_w.reshape(w.param.shape)))
 
 class FixedHeightResize(object):
     def __init__(self, height):
@@ -112,6 +76,30 @@ def collate_fn(batch_list):
 
     return (batch_images, batch_masks), (batch_labels, batch_label_sizes)
 
+def get_quantized_model(model, dataloader):
+    model_fp32 = nn.Sequential(
+        QuantStub(),
+        model,
+        DeQuantStub(),
+    )
+
+    model_fp32.cpu()
+    model_fp32.eval()
+
+    model_fp32.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+
+    model_fp32_prepared = torch.ao.quantization.prepare(model_fp32)
+
+    # calibrate the prepared model to determine quantization parameters for activations
+    # in a real world setting, the calibration would be done with a representative dataset
+    input_data = next(iter(dataloader))
+    (input_data, _), _ = input_data
+
+    model_fp32_prepared(input_data)
+
+    model_int8 = torch.ao.quantization.convert(model_fp32_prepared)
+
+    return model_int8
 
 
 def grid_search(dataset_names, base_params, share_params, train_params):
@@ -146,19 +134,22 @@ def grid_search(dataset_names, base_params, share_params, train_params):
 
         yield _dataset_name, _base_params, _share_params, _train_params
 
-def run_experiment(base_params, share_params, train_params, model_name, dataset_names, experiment_name):
+def run_grid_search_experiment(base_params, share_params, train_params, model_name, dataset_names, experiment_name):
     for _dataset_name, _base_params, _share_params, _train_params in grid_search(
         dataset_names, base_params, share_params, train_params
     ):
         _experiment_name = f"{experiment_name} - {_dataset_name}"
-        train_model(
+        res = train_model(
             model_name=model_name,
             dataset_name=_dataset_name,
             base_params=_base_params,
             share_params=_share_params,
             train_params=_train_params,
-            mlflow_experiment=_experiment_name,
+            experiment_name=_experiment_name,
         )
+
+        if res:
+            return False
 
         # if model is not None:
         #     evaluate_model(
@@ -168,15 +159,15 @@ def run_experiment(base_params, share_params, train_params, model_name, dataset_
         #         base_params=_base_params,
         #         share_params=_share_params,
         #         train_params=_train_params,
-        #         mlflow_experiment=_experiment_name,
+        #         experiment_name=_experiment_name,
         #     )
         #     return
+    return True
 
-from mlflow.tracking.client import MlflowClient
 import gc
 
 
-def get_run(experiment, md5: str):
+def get_run_mlflow(experiment, md5: str):
     run = MlflowClient().search_runs(
         experiment_ids=experiment.experiment_id,
         filter_string=f"tags.md5 = '{md5}'",
@@ -187,17 +178,22 @@ def get_run(experiment, md5: str):
         return run[0]
     return None
 
+def get_run(experiment_name, md5: str):
+    api = wandb.Api(api_key=WANDB_API_KEY)
+    run = api.runs(path=f"{WANDB_ENTITY}/{experiment_name}", filters={"config.md5": md5})
+
+    if len(run) > 0:
+        return run[0]
+    return None
+
 
 def evaluate(model, dataloader, device):
     model.eval()
     cer = []
+    model.to(device)
 
     for val_step, data in enumerate(dataloader):
         (inputs, mask), (flat_labels, label_lens) = data
-        # print(i, "inp", inputs.shape)
-        # print(i, "mask", mask.shape)
-        # print(i, "flt lab", flat_labels.shape)
-        # print(i, "lab lens", label_lens.shape)
         with torch.no_grad():
             # inputs = transform(inputs.to(device))
             inputs = inputs.to(device)
@@ -216,7 +212,7 @@ def evaluate(model, dataloader, device):
         # print("mid out")
 
         # print(outputs[:2])
-        outputs *= mask.to(torch.long).cuda()
+        outputs *= mask.to(torch.long).to(device)
         # print("post out")
         # print(outputs[:2])
 
@@ -237,11 +233,6 @@ def evaluate(model, dataloader, device):
         preds = []
         for out in outputs:
             preds.append(out[torch.where(out != 0)[0]])
-
-        if val_step == 0:
-            print("Sample output", *preds[0].numpy().astype(np.int32).tolist())
-            print("Label", *labels[0].numpy().astype(np.int32).tolist())
-        
 
         # correct.extend((outputs == labels.to(device)).cpu().numpy().tolist())
         for pred, label in zip(preds, labels):
@@ -268,12 +259,20 @@ class TrainParams:
     patience: int = 20
     augment: str = None
     lr_warmup: int = None
-    model_id: int = 0
+    fold: int = 0
 
 
 def train_model(
-    model_name, dataset_name, base_params, share_params, train_params, mlflow_experiment
+    model_name, dataset_name, base_params, share_params, train_params, experiment_name
 ):
+    params = {
+        "model_name": model_name,
+        "dataset_name": dataset_name,
+        "base_params": base_params,
+        "share_params": share_params,
+        "train_params": train_params,
+        "experiment_name": experiment_name,
+    }
     if not ModelFactory.is_legal(model_name, base_params, share_params):
         print("Illegal config, skipping")
         return
@@ -306,25 +305,41 @@ def train_model(
         ]
     )
 
-    if dataset_name == "IAM_S":
-        print("Running with subset of train split IAM")
-        train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3], transform=train_transform)
-    if dataset_name == "IAM_M":
-        print("Running with subset of train split IAM")
-        train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3, 4, 5], transform=train_transform)
+    train_params = TrainParams(**train_params)
+    if train_params.fold == 0:
+        train_split = [0, 1, 2, 3, 4]
+        val_split = [5]
+        test_split = [6, 7]
+    elif train_params.fold == 1:
+        train_split = [0, 1, 2, 6, 7]
+        val_split = [3]
+        test_split = [4, 5]
+    elif train_params.fold == 2:
+        train_split = [0, 4, 5, 6, 7]
+        val_split = [1]
+        test_split = [2, 3]
+    elif train_params.fold == 3:
+        train_split = [2, 3, 4, 5, 6]
+        val_split = [7]
+        test_split = [0, 1]
 
-    else:
-        train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3, 4, 5, 6, 7, 8, 9], transform=train_transform)
-    val_dataset = HTRDataset(f"data/{dataset_name}", splits=[0], transform=val_transform)
-    test_dataset = HTRDataset(f"data/{dataset_name}", splits=[1], transform=val_transform)
+    # if dataset_name == "IAM_S":
+    #     print("Running with subset of train split IAM")
+    #     train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3], transform=train_transform)
+    # if dataset_name == "IAM_M":
+    #     print("Running with subset of train split IAM")
+    #     train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3, 4, 5], transform=train_transform)
+
+    # else:
+    train_dataset = HTRDataset(f"data/{dataset_name}", splits=train_split, transform=train_transform)
+    val_dataset = HTRDataset(f"data/{dataset_name}", splits=val_split, transform=val_transform)
+    test_dataset = HTRDataset(f"data/{dataset_name}", splits=test_split, transform=val_transform)
 
     # num_characters = len(train_dataset.get_chars())
     # base_params = base_params.copy()
     # base_params["num_outputs"] = num_characters + 1
 
-    experiment = mlflow.set_experiment(mlflow_experiment)
 
-    train_params = TrainParams(**train_params)
     model = ModelFactory.get_model(
         model_name,
         dataset_name=dataset_name,
@@ -334,20 +349,24 @@ def train_model(
     )
     base_model = model.get_base_model()
 
-    run = get_run(experiment, model.md5())
-    run_id = run.info.run_id if run is not None else None
+    # experiment = mlflow.set_experiment(experiment_name) #!!
+    run = get_run(experiment_name, model.md5())
 
-    if run_id is not None:
-        print(run_id)
+    if run is not None:
         print("Model already trained, skipping.")
         return False
 
-    with mlflow.start_run(run_id=run_id):
-        mlflow.set_tag("md5", model.md5())
-        mlflow.set_tag("base_md5", base_model.md5())
-        mlflow.set_tag("eval", False)
-        mlflow.set_tag("mlflow.runName", model.get_name())
-        mlflow.log_params(model.as_dict(flatten=True))
+    # with mlflow.start_run(run_id=run_id):
+    #     mlflow.set_tag("md5", model.md5())
+    #     mlflow.set_tag("base_md5", base_model.md5())
+    #     mlflow.set_tag("eval", False)
+    #     mlflow.set_tag("mlflow.runName", model.get_name())
+    #     mlflow.log_params(model.as_dict(flatten=True))
+    if True:
+        wandb.init(project=experiment_name, entity=WANDB_ENTITY, name=model.get_name())
+        wandb.config.update(model.as_dict(flatten=True)  )
+        wandb.config.update({"md5": model.md5()})
+        wandb.run.summary["repr_params"] = params
 
         torchinfo.summary(model, (1, 3, base_params["input_size"], 300))
 
@@ -426,6 +445,30 @@ def train_model(
                     torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1e-2, end_factor=1.0, total_iters=train_params.lr_warmup),
                     lr_scheduler,
                 ], milestones=[train_params.lr_warmup])
+            
+        if model.share_params.share_cnn:
+            if model.share_params.cnn_share_mode == "all":
+                cnn_cluster_axis = []
+            elif model.share_params.cnn_share_mode == "channel":
+                cnn_cluster_axis = [0, 1]
+            elif model.share_params.cnn_share_mode == "unit":
+                cnn_cluster_axis = [0, 1, 2, 3]
+            
+            model.set_clusterable_param(nn.Conv2d, "weight", cnn_cluster_axis, avoid_params=[f"block{i+1}.0" for i in range(5)])
+
+        if model.share_params.share_lstm:
+            if model.share_params.lstm_share_mode == "all":
+                lstm_cluster_axis = []
+            elif model.share_params.lstm_share_mode == "channel":
+                lstm_cluster_axis = [0]
+            elif model.share_params.lstm_share_mode == "unit":
+                lstm_cluster_axis = [0, 1]
+
+            model.set_clusterable_param(nn.LSTM, "weight_hh_l0", lstm_cluster_axis)
+            model.set_clusterable_param(nn.LSTM, "weight_hh_l0_reverse", lstm_cluster_axis)
+            model.set_clusterable_param(nn.LSTM, "weight_ih_l0", lstm_cluster_axis)
+            model.set_clusterable_param(nn.LSTM, "weight_ih_l0_reverse", lstm_cluster_axis)
+            
 
         model.to(device)
 
@@ -435,11 +478,12 @@ def train_model(
         losses = []
         for epoch in range(train_params.epochs):
             start_time = time.time()
-            if (epoch - last_best_epoch) > train_params.patience and (epoch > (model.share_params.warmup_steps + train_params.min_epochs * 3)):
+            if (epoch - last_best_epoch) > train_params.patience and (epoch > (model.share_params.warmup_steps + train_params.min_epochs)) and (best_cer < 0.4):
                 break
 
-            mlflow.log_metric("epoch", epoch, step=global_step)
-            mlflow.log_metric("lr", lr_scheduler.get_last_lr()[0], step=global_step)
+            # mlflow.log_metric("epoch", epoch, step=global_step)
+            # mlflow.log_metric("lr", lr_scheduler.get_last_lr()[0], step=global_step)
+            wandb.log({"epoch": epoch, "lr": lr_scheduler.get_last_lr()[0]}, step=global_step)
             model.train()
 
             for i, data in enumerate(train_dataloader, 0):
@@ -453,7 +497,7 @@ def train_model(
                 with torch.autocast(device_type="cuda"):
                     inputs = inputs.to(device)
                     outputs = model(inputs)
-                    # print(f"Inf {i} {time.time() - start_time}")
+                    # print(f"Inf {i} {time.time() - start_time}" )
                     # outputs = outputs.log_softmax(2)
 
                     with torch.no_grad():
@@ -478,7 +522,8 @@ def train_model(
                         f"[{epoch + 1}, {global_step + 1:5d}] loss: {np.mean(losses):.3f}"
                     )
 
-                    mlflow.log_metric("loss", np.mean(losses), step=global_step)
+                    # mlflow.log_metric("loss", np.mean(losses), step=global_step)
+                    wandb.log({"loss": np.mean(losses)}, step=global_step)
                     losses = []
 
                 global_step += 1
@@ -486,53 +531,78 @@ def train_model(
             lr_scheduler.step()
 
 
-            print(f"Train time: {time.time() - start_time} s")
+            # print(f"Train time: {time.time() - start_time} s")
             val_start = time.time()
             val_cer = evaluate(model, val_dataloader, device)
-            print(f"Validation time: {time.time() - val_start} s")
-            mlflow.log_metric("val_cer", val_cer, step=global_step)
-            print(f"Val cer: {val_cer:.4f}")
+            # print(f"Validation time: {time.time() - val_start} s")
+            # mlflow.log_metric("val_cer", val_cer, step=global_step)
+            wandb.log({"val_cer": val_cer}, step=global_step)
+            ## print(f"Val cer: {val_cer:.4f}")
 
             if val_cer < best_cer:
                 last_best_epoch = epoch
                 best_cer = val_cer
                 print("Decreased best cer")
                 # model.save()
+                model.save()
                 cer = evaluate(model, test_dataloader, device)
-                mlflow.log_metric("cer", cer)
-                mlflow.log_metric("params", model.get_params())
-                # torch.save(model.state_dict(), model.path)
+                # mlflow.log_metric("cer", cer)
+                # mlflow.log_metric("params", model.get_params())
+                wandb.run.summary["cer"] = cer
+                wandb.run.summary["params"] = model.get_params()
 
             if epoch >= model.share_params.warmup_steps and epoch < (model.share_params.warmup_steps + model.share_params.cluster_steps):
-                print("Clustering weights")
+                # print("Clustering weights")
                 model.make_clusterable()
-                clusterable_weights = model.get_clusterable_weights()
-                cluster_weights(clusterable_weights, model.share_params.cluster_ratio)
+                # clusterable_weights = model.get_clusterable_weights()
+                # cluster_weights(clusterable_weights, model.share_params.cluster_ratio)
+                clust_metrics = model.cluster(model.share_params.cluster_ratio)
+                # mlflow.log_metric("cluster_metrics", clust_metrics)
                 new_cer = evaluate(model, val_dataloader, device)
                 print(f"After cluster cer: {new_cer:.4f}")
             elif epoch == (model.share_params.warmup_steps + model.share_params.cluster_steps):
-                print("Clustering weights and setting new params")
+                # print("Clustering weights and setting new params")
                 params_b = model.get_params()
                 model.make_clusterable()
-                clusterable_weights = model.get_clusterable_weights()
-                cluster_weights(clusterable_weights, model.share_params.cluster_ratio, replace_params=True)
+                # clusterable_weights = model.get_clusterable_weights()
+                # cluster_weights(clusterable_weights, model.share_params.cluster_ratio, replace_params=True)
+                clust_metrics = model.cluster(model.share_params.cluster_ratio, replace_params=True)
+                # Revisar si se necesita
+                # with open("cluster_metrics.json", "w") as f:
+                #     f.write(json.dumps(clust_metrics))
+                #     mlflow.log_artifact("cluster_metrics.json", "cluster_metrics.json")
                 params_a = model.get_params()
                 optimizer.param_groups.clear()
                 optimizer.add_param_group({"params": list(model.parameters())})
                 print(f"Params before/after: {params_b} {params_a}")
 
-            print(f"Total epoch time: {time.time() - start_time} s")
+            # print(f"Total epoch time: {time.time() - start_time} s")
 
         # model.save()
+    wandb.finish()
 
+    if model.share_params.precision == "FP":
+        model = torch.load(model.get_model_path())
+        model.share_params.precision = "Q8"
+
+        wandb.init(project=experiment_name, entity=WANDB_ENTITY, name=model.get_name())
+        wandb.config.update(model.as_dict(flatten=True))
+        wandb.config.update({"md5": model.md5()})
+        wandb.run.summary["repr_params"] = params
+
+
+        model_q8 = get_quantized_model(model, train_dataloader)
+        cer = evaluate(model_q8, test_dataloader, "cpu")
+        wandb.run.summary["cer"] = cer
+        # evaluate_q8(model, train_dataloader, test_dataloader)
     # del model
     # model.load()
 
-    return model
+    return True
 
 
 def evaluate_model(
-    model, model_name, dataset_name, base_params, share_params, train_params, mlflow_experiment
+    model, model_name, dataset_name, base_params, share_params, train_params, experiment_name
 ):
     print(model_name, dataset_name, base_params, share_params, train_params, sep="\n")
     if not ModelFactory.is_legal(model_name, base_params, share_params):
@@ -541,7 +611,6 @@ def evaluate_model(
 
     device = "cuda"
 
-    experiment = mlflow.set_experiment(mlflow_experiment)
 
     train_params = TrainParams(**train_params)
     # model = ModelFactory.get_model(
@@ -555,6 +624,7 @@ def evaluate_model(
 
     print(model.md5())
 
+    experiment = mlflow.set_experiment(experiment_name)
     run = get_run(experiment, model.md5())
     base_run = get_run(experiment, base_model.md5())
 
@@ -606,7 +676,7 @@ def evaluate_model(
         #     mlflow.log_metric("cer-rel_diff", cer / baseline_cer)
         #     mlflow.log_metric("cer-abs_diff", cer - baseline_cer)
 
-        mlflow.set_tag("eval", True)
+        # mlflow.set_tag("eval", True)
 
 
 if __name__ == "__main__":
@@ -633,9 +703,23 @@ if __name__ == "__main__":
 
     #                         }
 
-    #                         # train_model(model_name="mlp", dataset_name="mnist", base_params=base_params, share_params=share_params, train_params=train_params, mlflow_experiment="WeightSharing")
-    #                         evaluate_model(model_name="mlp", dataset_name="mnist", base_params=base_params, share_params=share_params, train_params=train_params, mlflow_experiment="WeightSharing")
+    #                         # train_model(model_name="mlp", dataset_name="mnist", base_params=base_params, share_params=share_params, train_params=train_params, experiment_name="WeightSharing")
+    #                         evaluate_model(model_name="mlp", dataset_name="mnist", base_params=base_params, share_params=share_params, train_params=train_params, experiment_name="WeightSharing")
 
     # run_experiment(*experiments.cfresnet())
     # run_experiment(*experiments.crnn())
-    run_experiment(*experiments.sample())
+    # run_experiment(*experiments.find_best_model())
+
+    finished = run_grid_search_experiment(*experiments.baseline_reduction())
+    if not finished:
+        sys.exit(0)
+
+    finished = run_grid_search_experiment(*experiments.wclus_reduction())
+    if not finished:
+        sys.exit(0)
+
+    finished = run_grid_search_experiment(*experiments.baseline_recursion())
+    if not finished:
+        sys.exit(0)
+
+    sys.exit(2)

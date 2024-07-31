@@ -4,3 +4,6 @@ torchinfo
 progressbar2
 opencv-python-headless==4.8.0.74
 editdistance
+torchvision
+fast_pytorch_kmeans
+wandb

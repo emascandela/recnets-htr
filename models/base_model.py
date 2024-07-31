@@ -11,7 +11,7 @@ def flat_dict(data, prefix: str = ""):
     out_data = {}
     for k, v in data.items():
         if isinstance(v, dict):
-            out_data.update(flat_dict(v, prefix=f"{prefix}{k}."))
+            out_data.update(flat_dict(v, prefix=f"{prefix}{k}_"))
         else:
             if v is not None:
                 out_data[prefix+k] = v
@@ -31,9 +31,6 @@ class BaseModel(nn.Module):
             "share": dataclasses.asdict(self.share_params),
             "train": copy.deepcopy(self.train_params),
         }
-
-        if data["train"]["model_id"] == 0:
-            del(data["train"]["model_id"])
 
         if flatten:
             data = flat_dict(data)
@@ -63,7 +60,7 @@ class BaseModel(nn.Module):
     def save(self):
         path = self.get_model_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save(self.state_dict(), path)
+        torch.save(self, path)
 
     def load(self):
         self.load_state_dict(torch.load(self.get_model_path()))
