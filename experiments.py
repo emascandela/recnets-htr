@@ -265,7 +265,8 @@ def wclus_reduction():
     }
 
     model_name = "crnn"
-    dataset_names = ["WASHINGTON"]
+    # dataset_names = ["WASHINGTON"]
+    dataset_names = ["PARZIVAL", "SAINT_GALL", "WASHINGTON", "IAM"]
     # dataset_names = ["IAM_S"]
     experiment_name = "CRNN"
     return (
@@ -321,7 +322,8 @@ def baseline_reduction():
     }
 
     model_name = "crnn"
-    dataset_names = ["WASHINGTON"]
+    # dataset_names = ["WASHINGTON"]
+    dataset_names = ["PARZIVAL", "SAINT_GALL", "WASHINGTON", "IAM"]
     # dataset_names = ["IAM_S"]
     experiment_name = "CRNN"
     return (
@@ -383,6 +385,7 @@ def baseline_recursion():
 
     model_name = "crnn"
     dataset_names = ["WASHINGTON"]
+    dataset_names = ["PARZIVAL", "SAINT_GALL", "WASHINGTON", "IAM"]
     # dataset_names = ["IAM_S"]
     experiment_name = "CRNN"
     return (
