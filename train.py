@@ -353,7 +353,7 @@ def train_model(
     run = get_run(experiment_name, model.md5())
 
     if run is not None:
-        # print("Model already trained, skipping.")
+        print("Model already trained, skipping.")
         return False
 
     # with mlflow.start_run(run_id=run_id):
@@ -363,6 +363,7 @@ def train_model(
     #     mlflow.set_tag("mlflow.runName", model.get_name())
     #     mlflow.log_params(model.as_dict(flatten=True))
     if True:
+        print(f"Training model {model.get_name()} in experiment {experiment_name}")
         wandb.init(project=experiment_name, entity=WANDB_ENTITY, name=model.get_name())
         wandb.config.update(model.as_dict(flatten=True)  )
         wandb.config.update({"md5": model.md5()})
