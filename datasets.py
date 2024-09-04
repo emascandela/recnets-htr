@@ -83,13 +83,8 @@ class HTRDataset(Dataset):
 if __name__ == "__main__":
     dataset = HTRDataset("data/IAM/", splits=[0, 1, 2])
     image, label = dataset[0]
-    print(image.shape)
-    print(label)
-    print(np.unique(label))
 
     chars = get_dataset_chars("data/*/")
-    print(chars)
-    print(len(chars))
 # DatasetFactory.register("mnist", torchvision.datasets.MNIST)
 # DatasetFactory.register("cifar10", torchvision.datasets.CIFAR10)
 # DatasetFactory.register("cifar100", torchvision.datasets.CIFAR100)

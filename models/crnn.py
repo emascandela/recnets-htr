@@ -102,7 +102,7 @@ class ClusterableModule(nn.Module):
         if cluster_ratio >= 1.0:
             return []
         
-        print("clustering")
+        # print("clustering")
 
         with torch.no_grad():
             # weight_index = []
@@ -132,14 +132,14 @@ class ClusterableModule(nn.Module):
 
                 # with parallel_backend("threading", n_jobs=16):
                     # kmeans = KMeans(n_clusters=n_clusters, random_state=0, init="random", n_init=1).fit(np_weights)
-                print(k, n_clusters, weight_shape, np_weights.shape)
+                # print(k, n_clusters, weight_shape, np_weights.shape)
                 kmeans = KMeans(n_clusters=n_clusters, init_method="random", minibatch=min(32, n_clusters))
                 # kmeans = KMeans(n_clusters=n_clusters, init_method="kmeans++", minibatch=min(32, n_clusters))
 
                 # print("Initialized")
                 ws = torch.Tensor(np_weights).cuda()
                 kmeans.fit(ws.half(), centroids=init_methods.init_methods[kmeans.init_method](ws, kmeans.n_clusters).half())
-                print("fitted")
+                # print("fitted")
                 labels = kmeans.predict(ws.half())
 
                 metrics.append(
@@ -151,8 +151,8 @@ class ClusterableModule(nn.Module):
                 )
 
                 # clustered_weights = np.zeros(len(np_weights)).astype(np.int32)
-                print(labels, kmeans.centroids.shape)
-                print("")
+                # print(labels, kmeans.centroids.shape)
+                # print("")
                 clustered_weights = np.zeros_like(np_weights)
 
                 # cluster_centers = torch.from_numpy(kmeans.cluster_centers_)
