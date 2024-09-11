@@ -331,9 +331,9 @@ def train_model(
     #     train_dataset = HTRDataset(f"data/{dataset_name}", splits=[2, 3, 4, 5], transform=train_transform)
 
     # else:
-    train_dataset = HTRDataset(f"data/{dataset_name}", splits=train_split, transform=train_transform)
-    val_dataset = HTRDataset(f"data/{dataset_name}", splits=val_split, transform=val_transform)
-    test_dataset = HTRDataset(f"data/{dataset_name}", splits=test_split, transform=val_transform)
+    train_dataset = HTRDataset(f"/root/data/{dataset_name}", splits=train_split, transform=train_transform)
+    val_dataset = HTRDataset(f"/root/data/{dataset_name}", splits=val_split, transform=val_transform)
+    test_dataset = HTRDataset(f"/root/data/{dataset_name}", splits=test_split, transform=val_transform)
 
     # num_characters = len(train_dataset.get_chars())
     # base_params = base_params.copy()
@@ -353,7 +353,7 @@ def train_model(
     run = get_run(experiment_name, model.md5())
 
     if run is not None:
-        print("Model already trained, skipping.")
+        # print("Model already trained, skipping.")
         return False
 
     # with mlflow.start_run(run_id=run_id):
@@ -401,7 +401,7 @@ def train_model(
 
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset,
-            batch_size=train_params.batch_size,
+            batch_size=train_params.batch_size // (2 if dataset_name == "IAM" else 1),
             shuffle=True,
             num_workers=4,
             pin_memory=True,
