@@ -18,5 +18,3 @@ python resize_iam.py ;
 
 touch downloaded;
 fi
-
-https://drive.google.com/file/d/1Bi_iaV42CcUz-_QaruOKBxi1rEiihKRy/view?usp=drive_link
