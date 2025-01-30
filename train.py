@@ -353,8 +353,10 @@ def train_model(
     run = get_run(experiment_name, model.md5())
 
     if run is not None:
-        # print("Model already trained, skipping.")
+        print("Model already trained, skipping.")
         return False
+    
+    print("Training model")
 
     # with mlflow.start_run(run_id=run_id):
     #     mlflow.set_tag("md5", model.md5())
